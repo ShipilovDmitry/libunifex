@@ -3,15 +3,15 @@
 #include <unifex/single_thread_context.hpp>
 #include <unifex/sync_wait.hpp>
 #include <unifex/task.hpp>
-#include <unifex/then.hpp>
-#include <unifex/when_all.hpp>
 #include <chrono>
 #include <future>
+#include <iomanip>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <thread>
 
-// 1. Legacy callback-based NetworkService interface
+// 1. Legacy callback-based NetworkService interface (UNCHANGED)
 class NetworkService {
 public:
   using Response = std::string;
@@ -21,7 +21,6 @@ public:
       std::string request,
       std::function<void(Response)> on_success,
       std::function<void(Error)> on_error) {
-    // Simulate async network call on "network thread"
     std::thread([request = std::move(request),
                  on_success = std::move(on_success),
                  on_error = std::move(on_error)]() mutable {
@@ -38,15 +37,16 @@ public:
   }
 };
 
-// 2. Thread ID printer
+// 2. Thread ID printer (ENHANCED)
 void print_thread_info(const std::string& label) {
   auto id = std::this_thread::get_id();
   std::stringstream ss;
   ss << id;
-  std::cout << "[" << label << "] Thread: " << ss.str().substr(0, 8) << "\n";
+  std::cout << "[ " << std::setw(20) << label
+            << " ] Thread: " << ss.str().substr(0, 8) << "\n";
 }
 
-// 3. Coroutine wrapper for NetworkService
+// 3. Coroutine wrapper (UNCHANGED - runs on NETWORK thread)
 class NetworkServiceCoroutine {
   NetworkService& service_;
   unifex::single_thread_context& net_ctx_;
@@ -58,14 +58,12 @@ public:
     , net_ctx_(net_ctx) {}
 
   unifex::task<std::string> async_call(std::string request) {
-    // Pin to network context
+    // ✅ EXPLICIT: Pin to NETWORK thread
     co_await unifex::schedule(net_ctx_.get_scheduler());
-    print_thread_info("NETWORK CALL: " + request);
+    print_thread_info("🌐 NETWORK CALL: " + request);
 
-    // Promise for async completion
     auto promise = std::make_shared<std::promise<std::string>>();
 
-    // Call legacy callback API
     service_.call(
         std::move(request),
         [promise](std::string response) {
@@ -79,66 +77,61 @@ public:
           }
         });
 
-    // Suspend until callback completes
     try {
       co_return co_await unifex::just(promise->get_future().get());
     } catch (...) {
-      throw;  // Propagate network errors
+      throw;
     }
   }
 };
 
-// 4. CPU-intensive processing (runs on CPU context)
+// 4. CPU processing (EXPLICITLY pinned to CPU thread)
 unifex::task<std::string>
 process_data(unifex::single_thread_context& cpu_ctx, const std::string& data) {
+  // ✅ EXPLICIT: Pin to CPU thread
   co_await unifex::schedule(cpu_ctx.get_scheduler());
-  print_thread_info("CPU PROCESSING");
+  print_thread_info("🧠 CPU PROCESSING");
 
-  // Simulate CPU work
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
   std::string result = "PROCESSED_" + data;
-  print_thread_info("CPU DONE: " + result.substr(0, 20));
+  print_thread_info("✅ CPU DONE: " + result.substr(0, 20));
   co_return result;
 }
 
-// 5. Full workflow with context switching
-unifex::task<void> full_workflow(
+// 5. DEMO: Network → CPU workflow
+unifex::task<void> network_to_cpu_demo(
     NetworkServiceCoroutine& net_coro, unifex::single_thread_context& cpu_ctx) {
-  print_thread_info("WORKFLOW START");
+  print_thread_info("🚀 MAIN WORKFLOW START");
 
-  // Step 1: Network call #1 (NETWORK thread)
-  std::cout << "\n=== STEP 1: Fetch users ===\n";
-  auto users = co_await net_coro.async_call("GET /users");
-  std::cout << "Users: " << users << "\n";
+  std::cout << "\n" << std::string(60, '=') << "\n";
+  std::cout << "🌐 NETWORK CALL → 🧠 CPU PROCESS\n";
+  std::cout << std::string(60, '=') << "\n\n";
 
-  // Step 2: CPU processing (CPU thread)
-  std::cout << "\n=== STEP 2: Process data ===\n";
-  auto processed = co_await process_data(cpu_ctx, users);
+  // STEP 1: Network call (NETWORK thread)
+  print_thread_info("📡 Step 1: Starting network request");
+  auto raw_data = co_await net_coro.async_call("GET /api/raw-data");
+  std::cout << "📥 Raw response: " << raw_data << "\n\n";
 
-  // Step 3: Network call #2 with processed data (NETWORK thread)
-  std::cout << "\n=== STEP 3: Submit processed ===\n";
-  auto final_result = co_await net_coro.async_call("POST /submit/" + processed);
-  std::cout << "Final: " << final_result << "\n";
+  // STEP 2: EXPLICIT switch to CPU thread for processing
+  print_thread_info("🔄 Step 2: Switching to CPU thread...");
+  auto processed_data = co_await process_data(cpu_ctx, raw_data);
+  std::cout << "🔬 Processed: " << processed_data << "\n\n";
 
-  // Error case demo
-  std::cout << "\n=== STEP 4: Error demo ===\n";
-  try {
-    co_await net_coro.async_call("GET /error-endpoint");
-  } catch (const std::exception& e) {
-    std::cout << "Handled error: " << e.what() << "\n";
-  }
-
-  print_thread_info("WORKFLOW COMPLETE");
+  print_thread_info("🎉 WORKFLOW COMPLETE");
 }
 
 int main() {
-  std::cout << "=== NetworkService + Unifex Demo ===\n\n";
+  std::cout << "=== Network → CPU Thread Switching Demo ===\n\n";
 
+  // Thread contexts
   unifex::single_thread_context net_ctx, cpu_ctx;
   NetworkService service;
   NetworkServiceCoroutine coro_service(service, net_ctx);
 
-  unifex::sync_wait(full_workflow(coro_service, cpu_ctx));
+  // Run demo
+  unifex::sync_wait(network_to_cpu_demo(coro_service, cpu_ctx));
+
+  std::cout << "\n✅ Demo complete - saw thread switching!\n";
   return 0;
 }
