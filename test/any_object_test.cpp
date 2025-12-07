@@ -20,6 +20,7 @@
 #include <unifex/tag_invoke.hpp>
 #include <unifex/this.hpp>
 #include <unifex/type_index.hpp>
+#include <exception>
 
 #include <string>
 #include <type_traits>
