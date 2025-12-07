@@ -110,7 +110,13 @@ unifex::task<void> network_to_cpu_demo(
 
   // STEP 1: Network call (NETWORK thread)
   print_thread_info("📡 Step 1: Starting network request");
-  auto raw_data = co_await net_coro.async_call("GET /api/raw-data");
+  std::string raw_data;
+  try {
+    raw_data = co_await net_coro.async_call("GET /api/raw-data");
+  } catch (std::exception const& e) {
+    // on failure
+    co_return;
+  }
   std::cout << "📥 Raw response: " << raw_data << "\n\n";
 
   // STEP 2: EXPLICIT switch to CPU thread for processing
